@@ -14,8 +14,6 @@ import com.airepublic.bmstoinverter.core.Inverter;
 import com.airepublic.bmstoinverter.core.InverterConfig;
 import com.airepublic.bmstoinverter.core.InverterDescriptor;
 import com.airepublic.bmstoinverter.core.Port;
-import com.airepublic.bmstoinverter.core.protocol.rs485.FrameDefinition;
-import com.airepublic.bmstoinverter.protocol.rs485.JSerialCommPort;
 import com.fazecast.jSerialComm.SerialPort;
 
 /**
@@ -42,7 +40,7 @@ public class PylonInverterRS485Descriptor implements InverterDescriptor {
 
     @Override
     public Port createPort(final InverterConfig config) {
-        final Port port = new JSerialCommPort(config.getPortLocator(), config.getBaudRate(), 8, 1, SerialPort.NO_PARITY, new byte[] { (byte) 0x7E, (byte) 0x32 }, FrameDefinition.create("SOAAOCCCCOLLLDVVVVO"));
+        final Port port = new PylonAsciiSerialPort(config.getPortLocator(), config.getBaudRate(), 8, 1, SerialPort.NO_PARITY);
         return port;
     }
 

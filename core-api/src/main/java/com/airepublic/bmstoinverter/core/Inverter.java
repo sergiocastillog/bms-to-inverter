@@ -263,7 +263,7 @@ public abstract class Inverter {
         final BatteryPack result = new BatteryPack();
         result.packSOC = 0;
         result.maxPackChargeCurrent = Integer.MAX_VALUE;
-        result.maxPackDischargeCurrent = Integer.MIN_VALUE;
+        result.maxPackDischargeCurrent = Integer.MAX_VALUE;
         result.maxPackVoltageLimit = Integer.MAX_VALUE;
         result.minPackVoltageLimit = Integer.MIN_VALUE;
         result.maxCellmV = Integer.MIN_VALUE;
@@ -289,11 +289,12 @@ public abstract class Inverter {
             result.maxPackVoltageLimit = Math.min(result.maxPackVoltageLimit, pack.maxPackVoltageLimit);
             result.minPackVoltageLimit = Math.max(result.minPackVoltageLimit, pack.minPackVoltageLimit);
             result.maxPackChargeCurrent = Math.min(result.maxPackChargeCurrent, pack.maxPackChargeCurrent);
-            result.maxPackDischargeCurrent = Math.max(result.maxPackDischargeCurrent, pack.maxPackDischargeCurrent);
+            result.maxPackDischargeCurrent = Math.min(result.maxPackDischargeCurrent, pack.maxPackDischargeCurrent);
             result.packVoltage += pack.packVoltage;
             result.packCurrent += pack.packCurrent;
             result.packSOC += pack.packSOC;
             result.packSOH += pack.packSOH;
+            result.tempAverage += pack.tempAverage;
             result.maxCellmV = Math.max(result.maxCellmV, pack.maxCellmV);
             result.maxCellVNum = pack.maxCellmV == result.maxCellmV ? pack.maxCellVNum : result.maxCellVNum;
             result.minCellmV = Math.min(result.minCellmV, pack.minCellmV);
@@ -306,7 +307,16 @@ public abstract class Inverter {
             result.dischargeMOSState |= pack.dischargeMOSState;
             result.forceCharge |= pack.forceCharge;
             result.remainingCapacitymAh += pack.remainingCapacitymAh;
+            final int cellOffset = result.numberOfCells;
+            final int temperatureOffset = result.numOfTempSensors;
+            for (int i = 0; i < pack.numberOfCells; i++) {
+                result.cellVmV[cellOffset + i] = pack.cellVmV[i];
+            }
+            for (int i = 0; i < pack.numOfTempSensors; i++) {
+                result.cellTemperature[temperatureOffset + i] = pack.cellTemperature[i];
+            }
             result.numberOfCells += pack.numberOfCells;
+            result.numOfTempSensors += pack.numOfTempSensors;
             result.chargerState |= pack.chargerState;
             result.loadState |= pack.loadState;
             result.bmsCycles = Math.max(result.bmsCycles, pack.bmsCycles);
@@ -360,7 +370,7 @@ public abstract class Inverter {
             result.maxPackChargeCurrent = 0;
         }
 
-        if (result.maxPackDischargeCurrent == Integer.MIN_VALUE) {
+        if (result.maxPackDischargeCurrent == Integer.MAX_VALUE) {
             result.maxPackDischargeCurrent = 0;
         }
         if (result.maxPackVoltageLimit == Integer.MAX_VALUE) {
@@ -403,7 +413,15 @@ public abstract class Inverter {
 
 
     private boolean validateBatteryPack(final BatteryPack pack) {
-        if (pack != null && pack.numberOfCells > 0 && pack.ratedCapacitymAh > 0 && pack.maxPackChargeCurrent != 0 && pack.maxPackDischargeCurrent != 0 && pack.maxPackVoltageLimit != 0) {
+        // A dynamic current limit of zero is valid (charge/discharge prohibited by the BMS).
+        // Rated capacity is not known for every binding and must not be invented just to pass
+        // aggregation. Validate the live measurements and limits that are actually required.
+        if (pack != null && pack.dataValid
+                && (pack.lastValidUpdate == 0 || System.currentTimeMillis() - pack.lastValidUpdate <= 3000)
+                && pack.numberOfCells > 0 && pack.packVoltage > 0 && pack.packSOC >= 0
+                && pack.maxPackChargeCurrent >= 0 && pack.maxPackDischargeCurrent >= 0
+                && pack.maxPackVoltageLimit > 0 && pack.minPackVoltageLimit > 0
+                && pack.maxCellmV > 0 && pack.minCellmV > 0) {
             return true;
         }
         return false;

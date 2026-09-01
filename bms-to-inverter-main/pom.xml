@@ -28,6 +28,7 @@
 					<archive>
 						<manifest>
 							<addClasspath>true</addClasspath>
+							<classpathPrefix>lib/</classpathPrefix>
 							<mainClass>
 								com.airepublic.bmstoinverter.BmsToInverter</mainClass>
 						</manifest>
@@ -98,6 +99,12 @@
 
 
 		<!-- #################### !!!!!!!!	BMSes 	!!!!!!!! ###################### -->
+		<!-- ####################  FIDUS FB-L-16 (MODBUS RTU)  ################### -->
+		<dependency>
+			<groupId>com.ai-republic.bms-to-inverter</groupId>
+			<artifactId>bms-fidus-modbus</artifactId>
+			<version>${project.version}</version>
+		</dependency>
 
 		<!-- ####################  Dummy Inverter  ################### -->
 		<dependency>

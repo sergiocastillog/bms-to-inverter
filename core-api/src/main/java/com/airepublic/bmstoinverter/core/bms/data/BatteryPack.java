@@ -25,6 +25,11 @@ import com.google.gson.Gson;
 public class BatteryPack {
     private transient final static Gson gson = new Gson();
 
+    /** Whether the latest acquisition completed successfully. */
+    public boolean dataValid = true;
+    /** Time of the latest successful acquisition; zero means the binding does not track freshness. */
+    public long lastValidUpdate;
+
     public final Map<Alarm, AlarmLevel> alarms = new HashMap<>();
     /** Battery type: 0=lithium iron, 1=ternary lithium, 2=lithium titanate */
     public int type;

@@ -13,6 +13,7 @@ package com.airepublic.bmstoinverter.inverter.pylon.rs485;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -54,15 +55,16 @@ public class PylonInverterRS485Processor extends Inverter {
         // check if the inverter is actively requesting data
         if (requestFrame != null) {
             LOG.debug("Inverter actively requesting frames from BMS");
-            requestFrame.position(3);
-            final byte adr = ByteAsciiConverter.convertAsciiBytesToByte(requestFrame.get(), requestFrame.get());
-            final byte cid1 = ByteAsciiConverter.convertAsciiBytesToByte(requestFrame.get(), requestFrame.get());
-            final byte cid2 = ByteAsciiConverter.convertAsciiBytesToByte(requestFrame.get(), requestFrame.get());
-            final byte[] lengthBytes = new byte[4];
-            requestFrame.get(lengthBytes);
-            final int length = ByteAsciiConverter.convertAsciiBytesToShort(lengthBytes) & 0x0FFF;
-            final byte[] data = new byte[length];
-            requestFrame.get(data);
+            final ParsedRequest request;
+            try {
+                request = parseRequest(requestFrame);
+            } catch (final IllegalArgumentException e) {
+                LOG.warn("Ignoring invalid Pylon ASCII request: {}", e.getMessage());
+                return frames;
+            }
+            final byte adr = request.address;
+            final byte cid1 = request.cid1;
+            final byte cid2 = request.cid2;
 
             if (cid1 != 0x46) {
                 // not supported
@@ -75,62 +77,41 @@ public class PylonInverterRS485Processor extends Inverter {
                 case 0x4F: // 0x4F Protocol Version
                     responseData = createProtocolVersion(aggregatedPack);
                 break;
-                case 0x51: // 0x51 Manufacturer Code
-                    responseData = createManufacturerCode(aggregatedPack);
-                break;
                 case (byte) 0x92: // 0x92 Charge/Discharge Management Info
                     responseData = createChargeDischargeManagementInfo(aggregatedPack);
                 break;
                 case 0x42: // 0x42 Cell Information
                     responseData = createCellInformation(aggregatedPack);
                 break;
-                case 0x47: // 0x47 Voltage/Current Limits
-                    responseData = createVoltageCurrentLimits(aggregatedPack);
-                break;
-                case 0x60: // 0x60 System Info
-                    responseData = createSystemInfo(aggregatedPack);
-                break;
                 case 0x61: // 0x61 Battery Information
                     responseData = createBatteryInformation(aggregatedPack);
                 break;
-                case 0x62:
+                case 0x62: // 0x62 Alarms
                     responseData = createAlarms(aggregatedPack);
-                break; // 0x62 Alarms
-                case 0x63:
+                break;
+                case 0x63: // 0x63 Charge/Discharge Information
                     responseData = createChargeDischargeIfno(aggregatedPack);
-                break; // 0x63
+                break;
 
                 default:
                     // not supported
                     return frames;
             }
 
+            // Discovery is independent of live telemetry. Operational responses fail
+            // closed instead of publishing the zero-valued aggregate during a BMS read.
+            if (cid2 != 0x4F && !hasFreshBatteryData(aggregatedPack)) {
+                LOG.warn("Not responding to Pylon command {}: no fresh Fidus data", String.format("%02X", cid2));
+                return frames;
+            }
+
             frames.add(prepareSendFrame(adr, cid1, (byte) 0x00, responseData));
 
             frames.stream().forEach(f -> System.out.println(Port.printBuffer(f)));
         } else {
-            LOG.debug("Inverter is not requesting data, trying to send data actively");
-            // try to send data actively
-            final byte adr = 0x12;
-            frames.add(prepareSendFrame(adr, (byte) 0x46, (byte) 0x4F, new byte[0]));
-            // this is wrong anyway as the CID1 should be 0x46 for responses
-            // frames.add(prepareSendFrame(adr, (byte) 0x51, (byte) 0x00,
-            // createManufacturerCode(aggregatedPack)));
-            // frames.add(prepareSendFrame(adr, (byte) 0x92, (byte) 0x00,
-            // createChargeDischargeManagementInfo(aggregatedPack)));
-            // frames.add(prepareSendFrame(adr, (byte) 0x42, (byte) 0x00,
-            // createCellInformation(aggregatedPack)));
-            // frames.add(prepareSendFrame(adr, (byte) 0x47, (byte) 0x00,
-            // createVoltageCurrentLimits(aggregatedPack)));
-            // frames.add(prepareSendFrame(adr, (byte) 0x60, (byte) 0x00, createSystemInfo(aggregatedPack)));
-            // frames.add(prepareSendFrame(adr, (byte) 0x61, (byte) 0x00,
-            // createBatteryInformation(aggregatedPack)));
-            // frames.add(prepareSendFrame(adr, (byte) 0x62, (byte) 0x00, createAlarms(aggregatedPack)));
-            // frames.add(prepareSendFrame(adr, (byte) 0x63, (byte) 0x00,
-            // createChargeDischargeIfno(aggregatedPack)));
-
-            LOG.debug("Actively sending {} frames to inverter", frames.size());
-            frames.stream().forEach(f -> System.out.println(Port.printBuffer(f)));
+            // This protocol is strictly request/response. Never transmit unsolicited
+            // frames onto the Axpert RS485 bus.
+            LOG.debug("No Pylon request received; nothing will be transmitted");
         }
 
         return frames;
@@ -139,13 +120,8 @@ public class PylonInverterRS485Processor extends Inverter {
 
     // 0x4F
     private byte[] createProtocolVersion(final BatteryPack pack) {
-        final ByteBuffer buffer = ByteBuffer.allocate(4096);
-        buffer.put(ByteAsciiConverter.convertStringToAsciiBytes(pack.softwareVersion, 1));
-
-        final byte[] data = new byte[buffer.position()];
-        buffer.get(data, 0, buffer.position());
-
-        return data;
+        // Exact response observed to make this Axpert advance past discovery.
+        return new byte[0];
     }
 
 
@@ -156,18 +132,15 @@ public class PylonInverterRS485Processor extends Inverter {
         buffer.put(ByteAsciiConverter.convertStringToAsciiBytes(pack.softwareVersion, 1));
         buffer.put(ByteAsciiConverter.convertStringToAsciiBytes(pack.manufacturerCode, 20));
 
-        final byte[] data = new byte[buffer.position()];
-        buffer.get(data, 0, buffer.position());
-
-        return data;
+        return writtenBytes(buffer);
     }
 
 
     // 0x92
     private byte[] createChargeDischargeManagementInfo(final BatteryPack pack) {
         final ByteBuffer buffer = ByteBuffer.allocate(4096);
-        buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (pack.maxPackVoltageLimit * 100)));
-        buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (pack.minPackVoltageLimit * 100)));
+        buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (pack.maxPackVoltageLimit * 10)));
+        buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (pack.minPackVoltageLimit * 10)));
         buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (pack.maxPackChargeCurrent * 10)));
         buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (pack.maxPackDischargeCurrent * 10)));
         byte chargeDischargeMOSStates = 0x00;
@@ -176,10 +149,7 @@ public class PylonInverterRS485Processor extends Inverter {
         chargeDischargeMOSStates = BitUtil.setBit(chargeDischargeMOSStates, 5, pack.forceCharge);
         buffer.put(ByteAsciiConverter.convertByteToAsciiBytes(chargeDischargeMOSStates));
 
-        final byte[] data = new byte[buffer.position()];
-        buffer.get(data, 0, buffer.position());
-
-        return data;
+        return writtenBytes(buffer);
     }
 
 
@@ -204,12 +174,9 @@ public class PylonInverterRS485Processor extends Inverter {
         buffer.put(ByteAsciiConverter.convertByteToAsciiBytes((byte) (pack.ratedCapacitymAh * 1000 > 65 ? 4 : 2)));
         buffer.put(ByteAsciiConverter.convertCharToAsciiBytes((char) (pack.ratedCapacitymAh / 100)));
         buffer.put(ByteAsciiConverter.convertByteToAsciiBytes((byte) pack.bmsCycles));
-        buffer.put(new byte[] { 0, 0, 0, 0, 0, 0 }); // old compatibility
+        buffer.put("000000".getBytes(StandardCharsets.US_ASCII)); // three zero bytes, hex ASCII
 
-        final byte[] data = new byte[buffer.position()];
-        buffer.get(data, 0, buffer.position());
-
-        return data;
+        return writtenBytes(buffer);
     }
 
 
@@ -229,10 +196,7 @@ public class PylonInverterRS485Processor extends Inverter {
         buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (-40 * 10 + 2731))); // min discharge temp
         buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (pack.maxPackDischargeCurrent * 10)));
 
-        final byte[] data = new byte[buffer.position()];
-        buffer.get(data, 0, buffer.position());
-
-        return data;
+        return writtenBytes(buffer);
     }
 
 
@@ -249,10 +213,7 @@ public class PylonInverterRS485Processor extends Inverter {
             buffer.put(ByteAsciiConverter.convertStringToAsciiBytes("Battery S/N #" + i, 16));
         }
 
-        final byte[] data = new byte[buffer.position()];
-        buffer.get(data, 0, buffer.position());
-
-        return data;
+        return writtenBytes(buffer);
     }
 
 
@@ -260,7 +221,9 @@ public class PylonInverterRS485Processor extends Inverter {
     private byte[] createBatteryInformation(final BatteryPack aggregatedPack) {
         final ByteBuffer buffer = ByteBuffer.allocate(4096);
 
-        buffer.put(ByteAsciiConverter.convertCharToAsciiBytes((char) (aggregatedPack.packVoltage * 100)));
+        // Internal voltage is 0.1 V; Pylon encodes it in 0.01 V.  Multiplying
+        // by 100 produced an overflow (53.0 V -> 530.00 V) on the Axpert.
+        buffer.put(ByteAsciiConverter.convertCharToAsciiBytes((char) (aggregatedPack.packVoltage * 10)));
         buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (aggregatedPack.packCurrent * 10)));
         buffer.put(ByteAsciiConverter.convertByteToAsciiBytes((byte) (aggregatedPack.packSOC / 10)));
         buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) aggregatedPack.bmsCycles)); // average
@@ -351,10 +314,7 @@ public class PylonInverterRS485Processor extends Inverter {
         // BMS min temperature pack
         buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) 0));
 
-        final byte[] data = new byte[buffer.position()];
-        buffer.get(data, 0, buffer.position());
-
-        return data;
+        return writtenBytes(buffer);
     }
 
 
@@ -426,8 +386,8 @@ public class PylonInverterRS485Processor extends Inverter {
     private byte[] createChargeDischargeIfno(final BatteryPack aggregatedPack) {
         final ByteBuffer buffer = ByteBuffer.allocate(4096);
 
-        buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (aggregatedPack.maxPackVoltageLimit * 100)));
-        buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (aggregatedPack.minPackVoltageLimit * 100)));
+        buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (aggregatedPack.maxPackVoltageLimit * 10)));
+        buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (aggregatedPack.minPackVoltageLimit * 10)));
         buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (aggregatedPack.maxPackChargeCurrent * 10)));
         buffer.put(ByteAsciiConverter.convertShortToAsciiBytes((short) (aggregatedPack.maxPackDischargeCurrent * 10)));
         byte chargeDischargeMOSStates = 0x00;
@@ -436,15 +396,15 @@ public class PylonInverterRS485Processor extends Inverter {
         chargeDischargeMOSStates = BitUtil.setBit(chargeDischargeMOSStates, 5, aggregatedPack.forceCharge);
         buffer.put(ByteAsciiConverter.convertByteToAsciiBytes(chargeDischargeMOSStates));
 
-        final byte[] data = new byte[buffer.position()];
-        buffer.get(data, 0, buffer.position());
-
-        return data;
+        return writtenBytes(buffer);
     }
 
 
     @Override
     protected ByteBuffer readRequest(final Port port) throws IOException {
+        if (!port.ensureOpen()) {
+            throw new IOException("Could not open Pylon RS485 port " + port.getPortname());
+        }
         return port.receiveFrame();
     }
 
@@ -464,7 +424,8 @@ public class PylonInverterRS485Processor extends Inverter {
         sendFrame.put(ByteAsciiConverter.convertByteToAsciiBytes(cid1)); // command CID1
         sendFrame.put(ByteAsciiConverter.convertByteToAsciiBytes(cid2)); // command CID2
         // Frame Length Byte
-        sendFrame.put(createLengthCheckSum(data.length * 2));
+        // Builders already return hexadecimal ASCII, so LENID is its character count.
+        sendFrame.put(createLengthCheckSum(data.length));
         // data
         sendFrame.put(data);
         // checksum
@@ -472,6 +433,96 @@ public class PylonInverterRS485Processor extends Inverter {
         sendFrame.put((byte) 0x0D); // End flag
 
         return sendFrame;
+    }
+
+
+    private boolean hasFreshBatteryData(final BatteryPack pack) {
+        return pack != null && pack.numberOfCells > 0 && pack.packVoltage > 0
+                && pack.packSOC >= 0 && pack.maxPackVoltageLimit > 0
+                && pack.minPackVoltageLimit > 0;
+    }
+
+
+    private static byte[] writtenBytes(final ByteBuffer buffer) {
+        final int length = buffer.position();
+        final byte[] data = new byte[length];
+        buffer.flip();
+        buffer.get(data);
+        return data;
+    }
+
+
+    static ParsedRequest parseRequest(final ByteBuffer frame) {
+        if (frame == null) {
+            throw new IllegalArgumentException("null frame");
+        }
+        final ByteBuffer source = frame.asReadOnlyBuffer();
+        source.position(0);
+        final byte[] raw = new byte[source.remaining()];
+        source.get(raw);
+        if (raw.length < 18 || raw[0] != 0x7E || raw[raw.length - 1] != 0x0D) {
+            throw new IllegalArgumentException("invalid SOI/EOI or truncated frame");
+        }
+        for (int i = 1; i < raw.length - 1; i++) {
+            if (!isHex(raw[i])) {
+                throw new IllegalArgumentException("non-hexadecimal ASCII field");
+            }
+        }
+        final int version = hex(raw, 1, 2);
+        final int address = hex(raw, 3, 2);
+        final int cid1 = hex(raw, 5, 2);
+        final int cid2 = hex(raw, 7, 2);
+        final int lengthField = hex(raw, 9, 4);
+        final int lenId = lengthField & 0x0FFF;
+        final int expectedLength = 1 + 12 + lenId + 4 + 1;
+        if (raw.length != expectedLength) {
+            throw new IllegalArgumentException("LENID does not match frame length");
+        }
+        final int expectedLengthChecksum = lengthChecksum(lenId);
+        if ((lengthField >>> 12) != expectedLengthChecksum || (lenId & 1) != 0) {
+            throw new IllegalArgumentException("invalid LENGTH checksum or odd INFO length");
+        }
+        int sum = 0;
+        for (int i = 1; i < raw.length - 5; i++) {
+            sum += raw[i] & 0xFF;
+        }
+        final int expectedChecksum = (-sum) & 0xFFFF;
+        final int receivedChecksum = hex(raw, raw.length - 5, 4);
+        if (receivedChecksum != expectedChecksum) {
+            throw new IllegalArgumentException("invalid frame checksum");
+        }
+        return new ParsedRequest((byte) version, (byte) address, (byte) cid1, (byte) cid2);
+    }
+
+
+    private static int lengthChecksum(final int length) {
+        final int nibbleSum = (length & 0xF) + (length >>> 4 & 0xF) + (length >>> 8 & 0xF);
+        return (-nibbleSum) & 0xF;
+    }
+
+
+    private static int hex(final byte[] raw, final int offset, final int length) {
+        return Integer.parseInt(new String(raw, offset, length, StandardCharsets.US_ASCII), 16);
+    }
+
+
+    private static boolean isHex(final byte value) {
+        return value >= '0' && value <= '9' || value >= 'A' && value <= 'F' || value >= 'a' && value <= 'f';
+    }
+
+
+    static final class ParsedRequest {
+        final byte version;
+        final byte address;
+        final byte cid1;
+        final byte cid2;
+
+        ParsedRequest(final byte version, final byte address, final byte cid1, final byte cid2) {
+            this.version = version;
+            this.address = address;
+            this.cid1 = cid1;
+            this.cid2 = cid2;
+        }
     }
 
 
@@ -509,13 +560,8 @@ public class PylonInverterRS485Processor extends Inverter {
         // Ensure LENID fits 12 bits
         final int lenId = length & 0x0FFF;
 
-        // Split LENID into high/low bytes
-        final int high = lenId >> 8 & 0xFF;
-        final int low = lenId & 0xFF;
-
-        // Compute 4-bit LCHKSUM so that (LCHKSUM + high + low) == 0 mod 16
-        final int sum = high + low & 0x0F;
-        final int lchk = ~sum + 1 & 0x0F;
+        // LCHKSUM covers each of the three LENID nibbles, not the two bytes.
+        final int lchk = lengthChecksum(lenId);
 
         // Combine into 16-bit LENGTH value
         final int lengthField = (lchk << 12 | lenId) & 0xFFFF;

@@ -28,6 +28,7 @@
 		<module>bms-discover-can</module>
 		<module>bms-growatt-can</module>
 		<module>bms-growatt-hv-can</module>
+		<module>bms-fidus-modbus</module>
 		<module>bms-hngce-modbus</module>
 		<module>bms-jk-can</module>
 		<module>bms-jk-modbus</module>
