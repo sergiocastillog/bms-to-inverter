@@ -56,7 +56,7 @@ public class FidusBmsModbusProcessor extends BMS {
             lastValidUpdate = System.currentTimeMillis();
             pack.lastValidUpdate = lastValidUpdate;
             pack.dataValid = true;
-            if (!dataValid) {
+            if (!dataValid && hasLoggedSnapshot) {
                 LOG.warn("Fidus telemetry recovered after a read failure");
             }
             dataValid = true;
