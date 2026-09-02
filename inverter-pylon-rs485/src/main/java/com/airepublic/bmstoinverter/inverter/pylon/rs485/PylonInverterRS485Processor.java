@@ -106,8 +106,6 @@ public class PylonInverterRS485Processor extends Inverter {
             }
 
             frames.add(prepareSendFrame(adr, cid1, (byte) 0x00, responseData));
-
-            frames.stream().forEach(f -> System.out.println(Port.printBuffer(f)));
         } else {
             // This protocol is strictly request/response. Never transmit unsolicited
             // frames onto the Axpert RS485 bus.

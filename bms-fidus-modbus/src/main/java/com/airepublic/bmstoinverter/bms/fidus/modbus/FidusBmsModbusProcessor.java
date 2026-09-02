@@ -3,6 +3,9 @@ package com.airepublic.bmstoinverter.bms.fidus.modbus;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.airepublic.bmstoinverter.core.BMS;
 import com.airepublic.bmstoinverter.core.Port;
 import com.airepublic.bmstoinverter.core.bms.data.BatteryPack;
@@ -14,6 +17,7 @@ import com.airepublic.bmstoinverter.protocol.modbus.ModbusUtil.RegisterCode;
  * No discovery and no Modbus write function are used by this class.
  */
 public class FidusBmsModbusProcessor extends BMS {
+    private static final Logger LOG = LoggerFactory.getLogger(FidusBmsModbusProcessor.class);
     static final int SUMMARY_START = 0x5631;
     static final int SUMMARY_COUNT = 22;
     static final int DETAIL_START = 0x571A;
@@ -24,6 +28,13 @@ public class FidusBmsModbusProcessor extends BMS {
 
     private volatile long lastValidUpdate;
     private volatile boolean dataValid;
+    private volatile boolean hasLoggedSnapshot;
+    private volatile int lastState = Integer.MIN_VALUE;
+    private volatile int lastStatusFlags = Integer.MIN_VALUE;
+    private volatile int lastChargeVoltageLimit = Integer.MIN_VALUE;
+    private volatile int lastDischargeVoltageLimit = Integer.MIN_VALUE;
+    private volatile int lastChargeCurrentLimit = Integer.MIN_VALUE;
+    private volatile int lastDischargeCurrentLimit = Integer.MIN_VALUE;
 
     @Override
     protected void collectData(final Port port) throws IOException {
@@ -45,8 +56,15 @@ public class FidusBmsModbusProcessor extends BMS {
             lastValidUpdate = System.currentTimeMillis();
             pack.lastValidUpdate = lastValidUpdate;
             pack.dataValid = true;
+            if (!dataValid) {
+                LOG.warn("Fidus telemetry recovered after a read failure");
+            }
             dataValid = true;
+            logOperationalChanges(snapshot);
         } catch (final IOException e) {
+            if (dataValid) {
+                LOG.error("Fidus telemetry lost; inverter responses will fail closed until it recovers", e);
+            }
             dataValid = false;
             pack.dataValid = false;
             throw e;
@@ -91,6 +109,7 @@ public class FidusBmsModbusProcessor extends BMS {
         value.maxDischargeCurrent = Math.min(required(summary, 0x563F - SUMMARY_START, "discharge current limit"), DISCHARGE_CURRENT_CEILING);
         value.soc = required(summary, 0x5642 - SUMMARY_START, "display SOC");
         value.soh = required(summary, 0x5644 - SUMMARY_START, "SOH");
+        value.statusFlags = required(summary, 0x5646 - SUMMARY_START, "status flags");
 
         // 0x5642 has been checked against the physical FB-L-16 display.
         // 0x571A can differ (94% vs 98% observed), so keep it diagnostic only.
@@ -187,6 +206,30 @@ public class FidusBmsModbusProcessor extends BMS {
         return lastValidUpdate;
     }
 
+    private void logOperationalChanges(final Snapshot value) {
+        final boolean limitsChanged = value.maxPackVoltage != lastChargeVoltageLimit
+                || value.minPackVoltage != lastDischargeVoltageLimit
+                || value.maxChargeCurrent != lastChargeCurrentLimit
+                || value.maxDischargeCurrent != lastDischargeCurrentLimit;
+        final boolean stateChanged = value.state != lastState || value.statusFlags != lastStatusFlags;
+        if (!hasLoggedSnapshot) {
+            LOG.info("Fidus gateway active: state={}, flags=0x{}, CVL={}V, DVL={}V, CCL={}A, DCL={}A",
+                    value.state, String.format("%04X", value.statusFlags), value.maxPackVoltage / 10f,
+                    value.minPackVoltage / 10f, value.maxChargeCurrent / 10f, value.maxDischargeCurrent / 10f);
+            hasLoggedSnapshot = true;
+        } else if (stateChanged || limitsChanged) {
+            LOG.warn("Fidus state/limits changed: state={}, flags=0x{}, CVL={}V, DVL={}V, CCL={}A, DCL={}A",
+                    value.state, String.format("%04X", value.statusFlags), value.maxPackVoltage / 10f,
+                    value.minPackVoltage / 10f, value.maxChargeCurrent / 10f, value.maxDischargeCurrent / 10f);
+        }
+        lastState = value.state;
+        lastStatusFlags = value.statusFlags;
+        lastChargeVoltageLimit = value.maxPackVoltage;
+        lastDischargeVoltageLimit = value.minPackVoltage;
+        lastChargeCurrentLimit = value.maxChargeCurrent;
+        lastDischargeCurrentLimit = value.maxDischargeCurrent;
+    }
+
     static final class Snapshot {
         int state;
         int packVoltage;
@@ -199,6 +242,7 @@ public class FidusBmsModbusProcessor extends BMS {
         int soc;
         int detailSoc;
         int soh;
+        int statusFlags;
         int minCell;
         int maxCell;
         int minCellNumber;

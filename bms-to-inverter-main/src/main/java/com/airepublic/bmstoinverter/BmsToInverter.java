@@ -287,7 +287,7 @@ public class BmsToInverter implements AutoCloseable {
                 do {
                     for (final BMS bms : bmsList) {
                         try {
-                            LOG.info("Reading BMS #" + bms.getBmsId() + " " + bms.getName() + " on " + bms.getPortLocator() + "...");
+                            LOG.debug("Reading BMS #" + bms.getBmsId() + " " + bms.getName() + " on " + bms.getPortLocator() + "...");
                             bms.process(() -> receivedData());
                         } catch (final Throwable e) {
                         }
@@ -313,7 +313,7 @@ public class BmsToInverter implements AutoCloseable {
                 inverterRunner = new Thread(() -> {
                     do {
                         try {
-                            LOG.info("Sending to inverter " + inverter.getName() + " on " + inverter.getPortLocator() + "...");
+                            LOG.debug("Sending to inverter " + inverter.getName() + " on " + inverter.getPortLocator() + "...");
                             inverter.process(() -> sentData());
                             Thread.sleep(inverter.getSendInterval() * 1000);
                         } catch (final Throwable e) {
@@ -339,7 +339,7 @@ public class BmsToInverter implements AutoCloseable {
                 notify();
             }
 
-            LOG.info(createBatteryOverview());
+            LOG.debug(createBatteryOverview());
 
             if (mqttProducer != null) {
                 // send energystorage data to internal MQTT broker
@@ -409,7 +409,7 @@ public class BmsToInverter implements AutoCloseable {
         if (!currentAlarms.isEmpty()) {
             LOG.info("BMS alarms:\n" + alarmContent.toString());
         } else {
-            LOG.info("BMS alarms: \n\tNONE");
+            LOG.debug("BMS alarms: \n\tNONE");
         }
 
         // check if alarms have changed

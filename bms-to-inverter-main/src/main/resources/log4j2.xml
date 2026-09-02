@@ -4,7 +4,7 @@
 	<Properties>
 		<Property name="pattern">%d{yyyy-MM-dd HH:mm:ss.SSS} | %-5.5p | %-10.10t | %-20.20C:%-5.5L | %msg%n</Property>
 	</Properties>
-	
+
 	<Appenders>
 		<Console name="Console" target="SYSTEM_OUT">
 			<PatternLayout pattern="${pattern}"/>
@@ -19,6 +19,7 @@
 				<TimeBasedTriggeringPolicy /><!-- Rotated everyday -->
 				<SizeBasedTriggeringPolicy size="100 MB"/> <!-- Or every 100 MB -->
 			</Policies>
+			<DefaultRolloverStrategy max="30"/>
 		</RollingFile>
 		
 		<RollingFile name="webserver" fileName="logs/webserver.log"
@@ -60,11 +61,9 @@
             <AppenderRef ref="mqtt"/>
         </Logger>
         
-		<Root level="debug"> <!-- We log everything -->
+		<Root level="info"> <!-- Keep normal operation concise; warnings/errors remain persistent. -->
 			<AppenderRef ref="Console"/> <!-- To console -->
 			<AppenderRef ref="bmstoinverter"/>
 		</Root>
 	</Loggers>
-	
 </Configuration>
-	
