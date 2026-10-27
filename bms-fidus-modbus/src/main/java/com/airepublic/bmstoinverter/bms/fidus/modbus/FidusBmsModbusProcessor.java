@@ -198,6 +198,9 @@ public class FidusBmsModbusProcessor extends BMS {
         }
     }
 
+    private volatile long lastHeartbeatLogTime;
+    private static final long HEARTBEAT_INTERVAL_MS = 60_000L;
+
     public boolean isDataValid() {
         return dataValid && System.currentTimeMillis() - lastValidUpdate <= 3000;
     }
@@ -212,22 +215,45 @@ public class FidusBmsModbusProcessor extends BMS {
                 || value.maxChargeCurrent != lastChargeCurrentLimit
                 || value.maxDischargeCurrent != lastDischargeCurrentLimit;
         final boolean stateChanged = value.state != lastState || value.statusFlags != lastStatusFlags;
+        final long now = System.currentTimeMillis();
+
         if (!hasLoggedSnapshot) {
-            LOG.info("Fidus gateway active: state={}, flags=0x{}, CVL={}V, DVL={}V, CCL={}A, DCL={}A",
-                    value.state, String.format("%04X", value.statusFlags), value.maxPackVoltage / 10f,
-                    value.minPackVoltage / 10f, value.maxChargeCurrent / 10f, value.maxDischargeCurrent / 10f);
+            LOG.info("Fidus gateway active: state={} ({}), SOC={}% SOH={}% Temp={}°C V={}V I={}A CVL={}V DVL={}V CCL={}A DCL={}A",
+                    value.state, stateDescription(value.state), value.soc / 10f, value.soh / 10f,
+                    value.tempAverage / 10f, value.packVoltage / 10f, value.packCurrent / 10f,
+                    value.maxPackVoltage / 10f, value.minPackVoltage / 10f, value.maxChargeCurrent / 10f, value.maxDischargeCurrent / 10f);
             hasLoggedSnapshot = true;
+            lastHeartbeatLogTime = now;
         } else if (stateChanged || limitsChanged) {
-            LOG.warn("Fidus state/limits changed: state={}, flags=0x{}, CVL={}V, DVL={}V, CCL={}A, DCL={}A",
-                    value.state, String.format("%04X", value.statusFlags), value.maxPackVoltage / 10f,
-                    value.minPackVoltage / 10f, value.maxChargeCurrent / 10f, value.maxDischargeCurrent / 10f);
+            LOG.warn("Fidus state/limits changed: state={} ({}), SOC={}% Temp={}°C V={}V I={}A CVL={}V DVL={}V CCL={}A DCL={}A",
+                    value.state, stateDescription(value.state), value.soc / 10f,
+                    value.tempAverage / 10f, value.packVoltage / 10f, value.packCurrent / 10f,
+                    value.maxPackVoltage / 10f, value.minPackVoltage / 10f, value.maxChargeCurrent / 10f, value.maxDischargeCurrent / 10f);
+            lastHeartbeatLogTime = now;
+        } else if (now - lastHeartbeatLogTime >= HEARTBEAT_INTERVAL_MS) {
+            LOG.info("Fidus telemetry: state={} ({}), SOC={}% Temp={}°C V={}V (cells {}mV-{}mV, delta={}mV) I={}A",
+                    value.state, stateDescription(value.state), value.soc / 10f,
+                    value.tempAverage / 10f, value.packVoltage / 10f,
+                    value.minCell, value.maxCell, value.maxCell - value.minCell,
+                    value.packCurrent / 10f);
+            lastHeartbeatLogTime = now;
         }
+
         lastState = value.state;
         lastStatusFlags = value.statusFlags;
         lastChargeVoltageLimit = value.maxPackVoltage;
         lastDischargeVoltageLimit = value.minPackVoltage;
         lastChargeCurrentLimit = value.maxChargeCurrent;
         lastDischargeCurrentLimit = value.maxDischargeCurrent;
+    }
+
+    private static String stateDescription(final int state) {
+        switch (state) {
+            case 1: return "charging";
+            case 2: return "discharging";
+            case 0: return "idle";
+            default: return "unknown(" + state + ")";
+        }
     }
 
     static final class Snapshot {

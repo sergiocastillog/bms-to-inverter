@@ -5,3 +5,5 @@
 /.project
 /.idea
 config.properties
+config.properties.bak
+logs/
